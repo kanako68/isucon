@@ -2,6 +2,8 @@ package main
 
 import (
 	crand "crypto/rand"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io"
@@ -14,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"crypto/sha512"
-    "encoding/hex"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -24,7 +24,6 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 )
-
 
 var (
 	db    *sqlx.DB
@@ -118,17 +117,15 @@ func escapeshellarg(arg string) string {
 	return "'" + strings.Replace(arg, "'", "'\\''", -1) + "'"
 }
 
-
-
 func digest(src string) string {
-    // SHA-512ハッシュを計算
-    hash := sha512.Sum512([]byte(src))
-    
-    // ハッシュをHEX文字列に変換
-    hashString := hex.EncodeToString(hash[:])
-    
-    // 小文字に変換（opensslの出力と合わせるため）
-    return strings.ToLower(hashString)
+	// SHA-512ハッシュを計算
+	hash := sha512.Sum512([]byte(src))
+
+	// ハッシュをHEX文字列に変換
+	hashString := hex.EncodeToString(hash[:])
+
+	// 小文字に変換（opensslの出力と合わせるため）
+	return strings.ToLower(hashString)
 }
 
 func calculateSalt(accountName string) string {
