@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"crypto/sha512"
+    "encoding/hex"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -23,6 +25,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 )
+
 
 var (
 	db    *sqlx.DB
@@ -116,11 +119,7 @@ func escapeshellarg(arg string) string {
 	return "'" + strings.Replace(arg, "'", "'\\''", -1) + "'"
 }
 
-import (
-    "crypto/sha512"
-    "encoding/hex"
-    "strings"
-)
+
 
 func digest(src string) string {
     // SHA-512ハッシュを計算
