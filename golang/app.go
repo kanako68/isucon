@@ -16,6 +16,7 @@ import (
 	"time"
 	"crypto/sha512"
     "encoding/hex"
+	"sort"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
