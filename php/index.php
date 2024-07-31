@@ -52,15 +52,15 @@ $container->set('settings', function() {
 });
 $container->set('db', function ($c) {
     $config = $c->get('settings');
-    $options = [
-        PDO::ATTR_EMULATE_PREPARES => true, // エミュレーションを有効にする
-    ];
-    return new PDO(
+   
+    $pdo=new PDO(
         "mysql:dbname={$config['db']['database']};host={$config['db']['host']};port={$config['db']['port']};charset=utf8mb4",
         $config['db']['username'],
         $config['db']['password'],
-        $options
     );
+
+    $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
+    return $pdo;
 });
 
 $container->set('view', function ($c) {
@@ -103,11 +103,25 @@ $container->set('helper', function ($c) {
 
         public function fetch_first($query, ...$params) {
             $db = $this->db();
-            $ps = $db->prepare($query);
-            $ps->execute($params);
-            $result = $ps->fetch();
-            $ps->closeCursor();
-            return $result;
+        
+            // パラメータをエスケープ
+            foreach ($params as $index => $param) {
+                // PDO::quoteを使ってパラメータをエスケープ
+                $params[$index] = $db->quote($param);
+            }
+        
+            // クエリのプレースホルダをエスケープされた値で置き換える
+            $query = vsprintf(str_replace('?', '%s', $query), $params);
+        
+            // クエリを実行
+            $result = $db->query($query);
+            if ($result) {
+                $row = $result->fetch();
+                $result->closeCursor();
+                return $row;
+            } else {
+                return false;
+            }
         }
 
         public function try_login($account_name, $password) {
@@ -132,35 +146,50 @@ $container->set('helper', function ($c) {
         public function make_posts(array $results, $options = []) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
-
+        
             $posts = [];
             foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
+                // `post_id`をエスケープ
+                $post_id = $this->db()->quote($post['id']);
+        
+                // コメント数を取得
+                $count_query = "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = $post_id";
+                $post['comment_count'] = $this->db()->query($count_query)->fetch()['count'];
+        
+                // コメントを取得
+                $comments_query = "SELECT * FROM `comments` WHERE `post_id` = $post_id ORDER BY `created_at` DESC";
                 if (!$all_comments) {
-                    $query .= ' LIMIT 3';
+                    $comments_query .= " LIMIT 3";
                 }
-
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
+                $comments = $this->db()->query($comments_query)->fetchAll(PDO::FETCH_ASSOC);
+        
+                // 各コメントに関連するユーザー情報を取得
                 foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
+                    $user_id = $this->db()->quote($comment['user_id']);
+                    $user_query = "SELECT * FROM `users` WHERE `id` = $user_id";
+                    $comment['user'] = $this->db()->query($user_query)->fetch();
                 }
                 unset($comment);
+        
                 $post['comments'] = array_reverse($comments);
-
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
+        
+                // 投稿に関連するユーザー情報を取得
+                $user_id = $this->db()->quote($post['user_id']);
+                $user_query = "SELECT * FROM `users` WHERE `id` = $user_id";
+                $post['user'] = $this->db()->query($user_query)->fetch();
+        
+                // ユーザーが削除されていない場合のみポストを追加
                 if ($post['user']['del_flg'] == 0) {
                     $posts[] = $post;
                 }
+        
+                // POST数の制限
                 if (count($posts) >= POSTS_PER_PAGE) {
                     break;
                 }
             }
             return $posts;
         }
-
     };
 });
 
@@ -274,36 +303,43 @@ $app->post('/register', function (Request $request, Response $response) {
         return redirect($response, '/register', 302);
     }
 
-    $user = $this->get('helper')->fetch_first('SELECT 1 FROM users WHERE `account_name` = ?', $account_name);
+    $db = $this->get('db');
+
+    // アカウント名のエスケープ
+    $escaped_account_name = $db->quote($account_name);
+    $user_query = "SELECT 1 FROM users WHERE `account_name` = $escaped_account_name";
+    $user = $db->query($user_query)->fetch();
     if ($user) {
         $this->get('flash')->addMessage('notice', 'アカウント名がすでに使われています');
         return redirect($response, '/register', 302);
     }
 
-    $db = $this->get('db');
-    $ps = $db->prepare('INSERT INTO `users` (`account_name`, `passhash`) VALUES (?,?)');
-    $ps->execute([
-        $account_name,
-        calculate_passhash($account_name, $password)
-    ]);
+    // パスワードハッシュのエスケープ
+    $passhash = $db->quote(calculate_passhash($account_name, $password));
+    $insert_query = "INSERT INTO `users` (`account_name`, `passhash`) VALUES ($escaped_account_name, $passhash)";
+    $db->exec($insert_query);
+
     $_SESSION['user'] = [
         'id' => $db->lastInsertId(),
     ];
+
     return redirect($response, '/', 302);
 });
+
 
 $app->get('/logout', function (Request $request, Response $response) {
     unset($_SESSION['user']);
     return redirect($response, '/', 302);
 });
-
 $app->get('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC');
-    $ps->execute();
-    $results = $ps->fetchAll(PDO::FETCH_ASSOC);
+    // クエリの直接実行
+    $query = 'SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC';
+    $results = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
+
+    // make_postsの呼び出し
     $posts = $this->get('helper')->make_posts($results);
 
     return $this->get('view')->render($response, 'index.php', [
@@ -313,13 +349,23 @@ $app->get('/', function (Request $request, Response $response) {
     ]);
 });
 
+
 $app->get('/posts', function (Request $request, Response $response) {
     $params = $request->getQueryParams();
     $max_created_at = $params['max_created_at'] ?? null;
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC');
-    $ps->execute([$max_created_at === null ? null : $max_created_at]);
-    $results = $ps->fetchAll(PDO::FETCH_ASSOC);
+
+    // クエリの構築
+    $query = 'SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts`';
+    if ($max_created_at !== null) {
+        // max_created_atをエスケープ
+        $max_created_at = $db->quote($max_created_at);
+        $query .= " WHERE `created_at` <= $max_created_at";
+    }
+    $query .= ' ORDER BY `created_at` DESC';
+
+    // クエリの実行
+    $results = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
 
     return $this->get('view')->render($response, 'posts.php', ['posts' => $posts]);
@@ -327,9 +373,13 @@ $app->get('/posts', function (Request $request, Response $response) {
 
 $app->get('/posts/{id}', function (Request $request, Response $response, $args) {
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT * FROM `posts` WHERE `id` = ?');
-    $ps->execute([$args['id']]);
-    $results = $ps->fetchAll(PDO::FETCH_ASSOC);
+
+    // $args['id'] をエスケープ
+    $id = $db->quote($args['id']);
+    $query = "SELECT * FROM `posts` WHERE `id` = $id";
+
+    // クエリの実行
+    $results = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results, ['all_comments' => true]);
 
     if (count($posts) == 0) {
@@ -338,7 +388,6 @@ $app->get('/posts/{id}', function (Request $request, Response $response, $args) 
     }
 
     $post = $posts[0];
-
     $me = $this->get('helper')->get_session_user();
 
     return $this->get('view')->render($response, 'post.php', ['post' => $post, 'me' => $me]);
@@ -377,14 +426,13 @@ $app->post('/', function (Request $request, Response $response) {
         }
 
         $db = $this->get('db');
-        $query = 'INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)';
-        $ps = $db->prepare($query);
-        $ps->execute([
-          $me['id'],
-          $mime,
-          file_get_contents($_FILES['file']['tmp_name']),
-          $params['body'],
-        ]);
+        $user_id = $db->quote($me['id']);
+        $mime_escaped = $db->quote($mime);
+        $imgdata_escaped = $db->quote(file_get_contents($_FILES['file']['tmp_name']));
+        $body_escaped = $db->quote($params['body']);
+
+        $query = "INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES ($user_id, $mime_escaped, $imgdata_escaped, $body_escaped)";
+        $db->exec($query);
         $pid = $db->lastInsertId();
         return redirect($response, "/posts/{$pid}", 302);
     } else {
@@ -392,6 +440,7 @@ $app->post('/', function (Request $request, Response $response) {
         return redirect($response, '/', 302);
     }
 });
+
 
 $app->get('/image/{id}.{ext}', function (Request $request, Response $response, $args) {
     if ($args['id'] == 0) {
@@ -409,7 +458,6 @@ $app->get('/image/{id}.{ext}', function (Request $request, Response $response, $
     $response->getBody()->write('404');
     return $response->withStatus(404);
 });
-
 $app->post('/comment', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
@@ -423,23 +471,22 @@ $app->post('/comment', function (Request $request, Response $response) {
         return $response->withStatus(422);
     }
 
-    // TODO: /\A[0-9]\Z/ か確認
-    if (preg_match('/[0-9]+/', $params['post_id']) == 0) {
+    if (preg_match('/^[0-9]+$/', $params['post_id']) == 0) {
         $response->getBody()->write('post_idは整数のみです');
         return $response;
     }
-    $post_id = $params['post_id'];
 
-    $query = 'INSERT INTO `comments` (`post_id`, `user_id`, `comment`) VALUES (?,?,?)';
-    $ps = $this->get('db')->prepare($query);
-    $ps->execute([
-        $post_id,
-        $me['id'],
-        $params['comment']
-    ]);
+    $db = $this->get('db');
+    $post_id = $db->quote($params['post_id']);
+    $user_id = $db->quote($me['id']);
+    $comment = $db->quote($params['comment']);
 
-    return redirect($response, "/posts/{$post_id}", 302);
+    $query = "INSERT INTO `comments` (`post_id`, `user_id`, `comment`) VALUES ($post_id, $user_id, $comment)";
+    $db->exec($query);
+
+    return redirect($response, "/posts/{$params['post_id']}", 302);
 });
+
 
 $app->get('/admin/banned', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
@@ -454,12 +501,12 @@ $app->get('/admin/banned', function (Request $request, Response $response) {
     }
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC');
-    $ps->execute();
-    $users = $ps->fetchAll(PDO::FETCH_ASSOC);
+    $query = 'SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC';
+    $users = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
 
     return $this->get('view')->render($response, 'banned.php', ['users' => $users, 'me' => $me]);
 });
+
 
 $app->post('/admin/banned', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
@@ -480,10 +527,12 @@ $app->post('/admin/banned', function (Request $request, Response $response) {
     }
 
     $db = $this->get('db');
-    $query = 'UPDATE `users` SET `del_flg` = ? WHERE `id` = ?';
+
     foreach ($params['uid'] as $id) {
-        $ps = $db->prepare($query);
-        $ps->execute([1, $id]);
+        // idをエスケープしてクエリに埋め込む
+        $id = $db->quote($id);
+        $query = "UPDATE `users` SET `del_flg` = 1 WHERE `id` = $id";
+        $db->exec($query);
     }
 
     return redirect($response, '/admin/banned', 302);
@@ -491,34 +540,51 @@ $app->post('/admin/banned', function (Request $request, Response $response) {
 
 $app->get('/@{account_name}', function (Request $request, Response $response, $args) {
     $db = $this->get('db');
-    $user = $this->get('helper')->fetch_first('SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0', $args['account_name']);
+
+    // ユーザー情報の取得
+    $account_name = $db->quote($args['account_name']);
+    $user_query = "SELECT * FROM `users` WHERE `account_name` = $account_name AND `del_flg` = 0";
+    $user = $db->query($user_query)->fetch(PDO::FETCH_ASSOC);
 
     if ($user === false) {
         $response->getBody()->write('404');
         return $response->withStatus(404);
     }
 
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `created_at`, `mime` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC');
-    $ps->execute([$user['id']]);
-    $results = $ps->fetchAll(PDO::FETCH_ASSOC);
+    // ユーザーの投稿の取得
+    $user_id = $db->quote($user['id']);
+    $posts_query = "SELECT `id`, `user_id`, `body`, `created_at`, `mime` FROM `posts` WHERE `user_id` = $user_id ORDER BY `created_at` DESC";
+    $results = $db->query($posts_query)->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
 
-    $comment_count = $this->get('helper')->fetch_first('SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?', $user['id'])['count'];
+    // コメント数の取得
+    $comment_count_query = "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = $user_id";
+    $comment_count = $db->query($comment_count_query)->fetch(PDO::FETCH_ASSOC)['count'];
 
-    $ps = $db->prepare('SELECT `id` FROM `posts` WHERE `user_id` = ?');
-    $ps->execute([$user['id']]);
-    $post_ids = array_column($ps->fetchAll(PDO::FETCH_ASSOC), 'id');
+    // ユーザーの投稿IDを取得
+    $post_ids_query = "SELECT `id` FROM `posts` WHERE `user_id` = $user_id";
+    $post_ids = array_column($db->query($post_ids_query)->fetchAll(PDO::FETCH_ASSOC), 'id');
     $post_count = count($post_ids);
 
+    // コメントされた投稿数の取得
     $commented_count = 0;
     if ($post_count > 0) {
-        $placeholder = implode(',', array_fill(0, count($post_ids), '?'));
-        $commented_count = $this->get('helper')->fetch_first("SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ({$placeholder})", ...$post_ids)['count'];
+        $post_ids_escaped = array_map([$db, 'quote'], $post_ids);
+        $placeholder = implode(',', $post_ids_escaped);
+        $commented_count_query = "SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ($placeholder)";
+        $commented_count = $db->query($commented_count_query)->fetch(PDO::FETCH_ASSOC)['count'];
     }
 
     $me = $this->get('helper')->get_session_user();
 
-    return $this->get('view')->render($response, 'user.php', ['posts' => $posts, 'user' => $user, 'post_count' => $post_count, 'comment_count' => $comment_count, 'commented_count'=> $commented_count, 'me' => $me]);
+    return $this->get('view')->render($response, 'user.php', [
+        'posts' => $posts,
+        'user' => $user,
+        'post_count' => $post_count,
+        'comment_count' => $comment_count,
+        'commented_count' => $commented_count,
+        'me' => $me
+    ]);
 });
 
 $app->run();
