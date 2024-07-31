@@ -2,10 +2,9 @@ include /home/isucon/env.sh
 
 # 問題によって変わる変数
 USER:=isucon
-# BIN_NAME:=app
-# BUILD_DIR:=/home/isucon/isucari/webapp/go
-SERVICE_NAME:=php8.3-fpm
-
+BIN_NAME:=app
+BUILD_DIR:=/home/isucon/private-isu/webapp/go
+SERVICE_NAME:=isu-go.service
 DB_PATH:=/etc/mysql
 NGINX_PATH:=/etc/nginx
 
@@ -103,10 +102,10 @@ deploy-db-conf:
 deploy-nginx-conf:
 	sudo cp -R etc/nginx/* $(NGINX_PATH)
 
-# .PHONY: build
-# build:
-# 	cd $(BUILD_DIR); \
-# 	go build -o $(BIN_NAME)
+.PHONY: build
+build:
+	cd $(BUILD_DIR); \
+	go build -o $(BIN_NAME)
 
 .PHONY: restart
 restart:
