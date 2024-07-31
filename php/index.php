@@ -52,10 +52,14 @@ $container->set('settings', function() {
 });
 $container->set('db', function ($c) {
     $config = $c->get('settings');
+    $options = [
+        PDO::ATTR_EMULATE_PREPARES => true, // エミュレーションを有効にする
+    ];
     return new PDO(
         "mysql:dbname={$config['db']['database']};host={$config['db']['host']};port={$config['db']['port']};charset=utf8mb4",
         $config['db']['username'],
-        $config['db']['password']
+        $config['db']['password'],
+        $options
     );
 });
 
