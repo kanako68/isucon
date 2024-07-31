@@ -116,15 +116,21 @@ func escapeshellarg(arg string) string {
 	return "'" + strings.Replace(arg, "'", "'\\''", -1) + "'"
 }
 
-func digest(src string) string {
-	// opensslのバージョンによっては (stdin)= というのがつくので取る
-	out, err := exec.Command("/bin/bash", "-c", `printf "%s" `+escapeshellarg(src)+` | openssl dgst -sha512 | sed 's/^.*= //'`).Output()
-	if err != nil {
-		log.Print(err)
-		return ""
-	}
+import (
+    "crypto/sha512"
+    "encoding/hex"
+    "strings"
+)
 
-	return strings.TrimSuffix(string(out), "\n")
+func digest(src string) string {
+    // SHA-512ハッシュを計算
+    hash := sha512.Sum512([]byte(src))
+    
+    // ハッシュをHEX文字列に変換
+    hashString := hex.EncodeToString(hash[:])
+    
+    // 小文字に変換（opensslの出力と合わせるため）
+    return strings.ToLower(hashString)
 }
 
 func calculateSalt(accountName string) string {
