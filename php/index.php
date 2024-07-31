@@ -132,32 +132,73 @@ $container->set('helper', function ($c) {
         public function make_posts(array $results, $options = []) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
-
+        
+            $comment_limit = $all_comments ? '' : 'LIMIT 3';
+        
+            $query = "
+                SELECT 
+                    p.*,
+                    u.id AS user_id, u.username AS user_username, u.del_flg AS user_del_flg,
+                    c.id AS comment_id, c.content AS comment_content, c.created_at AS comment_created_at,
+                    cu.id AS comment_user_id, cu.username AS comment_user_username,
+                    (SELECT COUNT(*) FROM `comments` WHERE `post_id` = p.id) AS comment_count
+                FROM 
+                    `posts` p
+                JOIN 
+                    `users` u ON p.user_id = u.id
+                LEFT JOIN 
+                    (
+                        SELECT * FROM `comments`
+                        ORDER BY created_at DESC
+                        {$comment_limit}
+                    ) c ON p.id = c.post_id
+                LEFT JOIN 
+                    `users` cu ON c.user_id = cu.id
+                WHERE 
+                    u.del_flg = 0
+                ORDER BY 
+                    p.created_at DESC
+                LIMIT " . POSTS_PER_PAGE;
+        
+            $stmt = $this->db()->prepare($query);
+            $stmt->execute();
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
             $posts = [];
-            foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
+            $current_post = null;
+            foreach ($results as $row) {
+                if ($current_post === null || $current_post['id'] !== $row['id']) {
+                    if ($current_post !== null) {
+                        $posts[] = $current_post;
+                    }
+                    $current_post = [
+                        'id' => $row['id'],
+                        'user' => [
+                            'id' => $row['user_id'],
+                            'username' => $row['user_username'],
+                            'del_flg' => $row['user_del_flg']
+                        ],
+                        'comments' => [],
+                        'comment_count' => $row['comment_count'],
+                        // その他の投稿情報をここに追加
+                    ];
                 }
-
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
-
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
-                    $posts[] = $post;
-                }
-                if (count($posts) >= POSTS_PER_PAGE) {
-                    break;
+                if ($row['comment_id'] !== null) {
+                    $current_post['comments'][] = [
+                        'id' => $row['comment_id'],
+                        'content' => $row['comment_content'],
+                        'created_at' => $row['comment_created_at'],
+                        'user' => [
+                            'id' => $row['comment_user_id'],
+                            'username' => $row['comment_user_username']
+                        ]
+                    ];
                 }
             }
+            if ($current_post !== null) {
+                $posts[] = $current_post;
+            }
+        
             return $posts;
         }
 
