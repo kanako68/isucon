@@ -27,7 +27,7 @@ deploy-conf: deploy-db-conf deploy-nginx-conf
 
 # ベンチマークを走らせる直前に実行する
 .PHONY: bench
-bench: build rm-logs deploy-conf restart
+bench: rm-logs deploy-conf restart
 
 # slow queryを確認する
 .PHONY: slow-query
