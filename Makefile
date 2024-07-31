@@ -2,9 +2,9 @@ include /home/isucon/env.sh
 
 # 問題によって変わる変数
 USER:=isucon
-BIN_NAME:=isucari
-BUILD_DIR:=/home/isucon/isucari/webapp/go
-SERVICE_NAME:=isucari.golang.service
+# BIN_NAME:=app
+# BUILD_DIR:=/home/isucon/isucari/webapp/go
+SERVICE_NAME:=php8.3-fpm
 
 DB_PATH:=/etc/mysql
 NGINX_PATH:=/etc/nginx
@@ -28,7 +28,7 @@ deploy-conf: deploy-db-conf deploy-nginx-conf
 
 # ベンチマークを走らせる直前に実行する
 .PHONY: bench
-bench: build rm-logs deploy-conf restart
+bench: rm-logs deploy-conf restart
 
 # slow queryを確認する
 .PHONY: slow-query
@@ -103,10 +103,10 @@ deploy-db-conf:
 deploy-nginx-conf:
 	sudo cp -R etc/nginx/* $(NGINX_PATH)
 
-.PHONY: build
-build:
-	cd $(BUILD_DIR); \
-	go build -o $(BIN_NAME)
+# .PHONY: build
+# build:
+# 	cd $(BUILD_DIR); \
+# 	go build -o $(BIN_NAME)
 
 .PHONY: restart
 restart:
