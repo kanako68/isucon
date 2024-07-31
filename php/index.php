@@ -248,6 +248,7 @@ $app->post('/login', function (Request $request, Response $response) {
     }
 });
 
+
 $app->get('/register', function (Request $request, Response $response) {
     if ($this->get('helper')->get_session_user() !== null) {
         return redirect($response, '/', 302);
@@ -327,39 +328,29 @@ $app->get('/posts', function (Request $request, Response $response) {
 
 $app->get('/posts/{id}', function (Request $request, Response $response, $args) {
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT * FROM `posts` WHERE `id` = ?');
-    $ps->execute([$args['id']]);
-    $results = $ps->fetchAll(PDO::FETCH_ASSOC);
+    $query = "SELECT * FROM posts WHERE id = {$args['id']}";
+    $results = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results, ['all_comments' => true]);
-
     if (count($posts) == 0) {
         $response->getBody()->write('404');
         return $response->withStatus(404);
     }
-
     $post = $posts[0];
-
     $me = $this->get('helper')->get_session_user();
-
     return $this->get('view')->render($response, 'post.php', ['post' => $post, 'me' => $me]);
 });
-
 $app->post('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
-
     if ($me === null) {
         return redirect($response, '/login', 302);
     }
-
     $params = $request->getParsedBody();
     if ($params['csrf_token'] !== session_id()) {
         $response->getBody()->write('422');
         return $response->withStatus(422);
     }
-
     if ($_FILES['file']) {
         $mime = '';
-        // 投稿のContent-Typeからファイルのタイプを決定する
         if (strpos($_FILES['file']['type'], 'jpeg') !== false) {
             $mime = 'image/jpeg';
         } elseif (strpos($_FILES['file']['type'], 'png') !== false) {
@@ -370,21 +361,13 @@ $app->post('/', function (Request $request, Response $response) {
             $this->get('flash')->addMessage('notice', '投稿できる画像形式はjpgとpngとgifだけです');
             return redirect($response, '/', 302);
         }
-
         if (strlen(file_get_contents($_FILES['file']['tmp_name'])) > UPLOAD_LIMIT) {
             $this->get('flash')->addMessage('notice', 'ファイルサイズが大きすぎます');
             return redirect($response, '/', 302);
         }
-
         $db = $this->get('db');
-        $query = 'INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)';
-        $ps = $db->prepare($query);
-        $ps->execute([
-          $me['id'],
-          $mime,
-          file_get_contents($_FILES['file']['tmp_name']),
-          $params['body'],
-        ]);
+        $query = "INSERT INTO posts (user_id, mime, imgdata, body) VALUES ({$me['id']}, '{$mime}', " . $db->quote(file_get_contents($_FILES['file']['tmp_name'])) . ", " . $db->quote($params['body']) . ")";
+        $db->query($query);
         $pid = $db->lastInsertId();
         return redirect($response, "/posts/{$pid}", 302);
     } else {
@@ -392,14 +375,13 @@ $app->post('/', function (Request $request, Response $response) {
         return redirect($response, '/', 302);
     }
 });
-
 $app->get('/image/{id}.{ext}', function (Request $request, Response $response, $args) {
     if ($args['id'] == 0) {
         return $response;
     }
-
-    $post = $this->get('helper')->fetch_first('SELECT * FROM `posts` WHERE `id` = ?', $args['id']);
-
+    $db = $this->get('db');
+    $query = "SELECT * FROM posts WHERE id = {$args['id']}";
+    $post = $db->query($query)->fetch(PDO::FETCH_ASSOC);
     if (($args['ext'] == 'jpg' && $post['mime'] == 'image/jpeg') ||
         ($args['ext'] == 'png' && $post['mime'] == 'image/png') ||
         ($args['ext'] == 'gif' && $post['mime'] == 'image/gif')) {
@@ -409,116 +391,93 @@ $app->get('/image/{id}.{ext}', function (Request $request, Response $response, $
     $response->getBody()->write('404');
     return $response->withStatus(404);
 });
-
 $app->post('/comment', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
-
     if ($me === null) {
         return redirect($response, '/login', 302);
     }
-
     $params = $request->getParsedBody();
     if ($params['csrf_token'] !== session_id()) {
         $response->getBody()->write('422');
         return $response->withStatus(422);
     }
-
-    // TODO: /\A[0-9]\Z/ か確認
     if (preg_match('/[0-9]+/', $params['post_id']) == 0) {
         $response->getBody()->write('post_idは整数のみです');
         return $response;
     }
     $post_id = $params['post_id'];
-
-    $query = 'INSERT INTO `comments` (`post_id`, `user_id`, `comment`) VALUES (?,?,?)';
-    $ps = $this->get('db')->prepare($query);
-    $ps->execute([
-        $post_id,
-        $me['id'],
-        $params['comment']
-    ]);
-
+    $db = $this->get('db');
+    $query = "INSERT INTO comments (post_id, user_id, comment) VALUES ({$post_id}, {$me['id']}, " . $db->quote($params['comment']) . ")";
+    $db->query($query);
     return redirect($response, "/posts/{$post_id}", 302);
 });
 
 $app->get('/admin/banned', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
-
     if ($me === null) {
         return redirect($response, '/login', 302);
     }
-
     if ($me['authority'] == 0) {
         $response->getBody()->write('403');
         return $response->withStatus(403);
     }
-
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC');
-    $ps->execute();
-    $users = $ps->fetchAll(PDO::FETCH_ASSOC);
-
+    $query = 'SELECT * FROM users WHERE authority = 0 AND del_flg = 0 ORDER BY created_at DESC';
+    $users = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
     return $this->get('view')->render($response, 'banned.php', ['users' => $users, 'me' => $me]);
 });
-
 $app->post('/admin/banned', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
-
     if ($me === null) {
         return redirect($response, '/login', 302);
     }
-
     if ($me['authority'] == 0) {
         $response->getBody()->write('403');
         return $response->withStatus(403);
     }
-
     $params = $request->getParsedBody();
     if ($params['csrf_token'] !== session_id()) {
         $response->getBody()->write('422');
         return $response->withStatus(422);
     }
-
     $db = $this->get('db');
-    $query = 'UPDATE `users` SET `del_flg` = ? WHERE `id` = ?';
     foreach ($params['uid'] as $id) {
-        $ps = $db->prepare($query);
-        $ps->execute([1, $id]);
+        $query = "UPDATE users SET del_flg = 1 WHERE id = {$id}";
+        $db->query($query);
     }
-
     return redirect($response, '/admin/banned', 302);
 });
-
 $app->get('/@{account_name}', function (Request $request, Response $response, $args) {
     $db = $this->get('db');
-    $user = $this->get('helper')->fetch_first('SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0', $args['account_name']);
-
+    $account_name = $db->quote($args['account_name']);
+    $query = "SELECT * FROM users WHERE account_name = {$account_name} AND del_flg = 0";
+    $user = $db->query($query)->fetch(PDO::FETCH_ASSOC);
     if ($user === false) {
         $response->getBody()->write('404');
         return $response->withStatus(404);
     }
-
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `created_at`, `mime` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC');
-    $ps->execute([$user['id']]);
-    $results = $ps->fetchAll(PDO::FETCH_ASSOC);
+    $query = "SELECT id, user_id, body, created_at, mime FROM posts WHERE user_id = {$user['id']} ORDER BY created_at DESC";
+    $results = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
-
-    $comment_count = $this->get('helper')->fetch_first('SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?', $user['id'])['count'];
-
-    $ps = $db->prepare('SELECT `id` FROM `posts` WHERE `user_id` = ?');
-    $ps->execute([$user['id']]);
-    $post_ids = array_column($ps->fetchAll(PDO::FETCH_ASSOC), 'id');
+    $query = "SELECT COUNT(*) AS count FROM comments WHERE user_id = {$user['id']}";
+    $comment_count = $db->query($query)->fetch(PDO::FETCH_ASSOC)['count'];
+    $query = "SELECT id FROM posts WHERE user_id = {$user['id']}";
+    $post_ids = array_column($db->query($query)->fetchAll(PDO::FETCH_ASSOC), 'id');
     $post_count = count($post_ids);
-
     $commented_count = 0;
     if ($post_count > 0) {
-        $placeholder = implode(',', array_fill(0, count($post_ids), '?'));
-        $commented_count = $this->get('helper')->fetch_first("SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ({$placeholder})", ...$post_ids)['count'];
+        $post_ids_str = implode(',', $post_ids);
+        $query = "SELECT COUNT(*) AS count FROM comments WHERE post_id IN ({$post_ids_str})";
+        $commented_count = $db->query($query)->fetch(PDO::FETCH_ASSOC)['count'];
     }
-
     $me = $this->get('helper')->get_session_user();
-
-    return $this->get('view')->render($response, 'user.php', ['posts' => $posts, 'user' => $user, 'post_count' => $post_count, 'comment_count' => $comment_count, 'commented_count'=> $commented_count, 'me' => $me]);
+    return $this->get('view')->render($response, 'user.php', [
+        'posts' => $posts,
+        'user' => $user,
+        'post_count' => $post_count,
+        'comment_count' => $comment_count,
+        'commented_count'=> $commented_count,
+        'me' => $me
+    ]);
 });
-
 $app->run();
