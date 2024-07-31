@@ -44,8 +44,8 @@ $container->set('settings', function() {
         'db' => [
             'host' => $_SERVER['ISUCONP_DB_HOST'] ?? 'localhost',
             'port' => $_SERVER['ISUCONP_DB_PORT'] ?? 3306,
-            'username' => $_SERVER['ISUCONP_DB_USER'] ?? 'root',
-            'password' => $_SERVER['ISUCONP_DB_PASSWORD'] ?? null,
+            'username' => $_SERVER['ISUCONP_DB_USER'] ?? 'isuconp',
+	    'password' => $_SERVER['ISUCONP_DB_PASSWORD'] ?? 'isuconp',
             'database' => $_SERVER['ISUCONP_DB_NAME'] ?? 'isuconp',
         ],
     ];
