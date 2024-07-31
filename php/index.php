@@ -132,32 +132,48 @@ $container->set('helper', function ($c) {
         public function make_posts(array $results, $options = []) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
-
+        
+            $post_ids = array_column($results, 'id');
+            $user_ids = array_unique(array_column($results, 'user_id'));
+        
+            // Get all comments for these posts in one query
+            $comments_query = "SELECT c.*, u.* 
+                                FROM comments c
+                                JOIN users u ON c.user_id = u.id
+                                WHERE c.post_id IN (" . implode(',', array_fill(0, count($post_ids), '?')) . ")
+                                ORDER BY c.post_id, c.created_at DESC";
+            $stmt = $this->db()->prepare($comments_query);
+            $stmt->execute($post_ids);
+            $all_comments_data = $stmt->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_ASSOC);
+        
+            // Get all users for these posts in one query
+            $users_query = "SELECT * FROM users WHERE id IN (" . implode(',', array_fill(0, count($user_ids), '?')) . ")";
+            $stmt = $this->db()->prepare($users_query);
+            $stmt->execute($user_ids);
+            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $users = array_column($users, null, 'id');
+        
             $posts = [];
             foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
+                if (!isset($users[$post['user_id']]) || $users[$post['user_id']]['del_flg'] != 0) {
+                    continue;
+                }
+        
+                $post['user'] = $users[$post['user_id']];
+                $post['comments'] = isset($all_comments_data[$post['id']]) ? $all_comments_data[$post['id']] : [];
+                $post['comment_count'] = count($post['comments']);
+        
                 if (!$all_comments) {
-                    $query .= ' LIMIT 3';
+                    $post['comments'] = array_slice($post['comments'], 0, 3);
                 }
-
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
-
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
-                    $posts[] = $post;
-                }
+        
+                $posts[] = $post;
+        
                 if (count($posts) >= POSTS_PER_PAGE) {
                     break;
                 }
             }
+        
             return $posts;
         }
 

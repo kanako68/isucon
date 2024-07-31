@@ -9,12 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"crypto/sha512"
+    "encoding/hex"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -23,6 +24,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 )
+
 
 var (
 	db    *sqlx.DB
@@ -116,15 +118,17 @@ func escapeshellarg(arg string) string {
 	return "'" + strings.Replace(arg, "'", "'\\''", -1) + "'"
 }
 
-func digest(src string) string {
-	// opensslのバージョンによっては (stdin)= というのがつくので取る
-	out, err := exec.Command("/bin/bash", "-c", `printf "%s" `+escapeshellarg(src)+` | openssl dgst -sha512 | sed 's/^.*= //'`).Output()
-	if err != nil {
-		log.Print(err)
-		return ""
-	}
 
-	return strings.TrimSuffix(string(out), "\n")
+
+func digest(src string) string {
+    // SHA-512ハッシュを計算
+    hash := sha512.Sum512([]byte(src))
+    
+    // ハッシュをHEX文字列に変換
+    hashString := hex.EncodeToString(hash[:])
+    
+    // 小文字に変換（opensslの出力と合わせるため）
+    return strings.ToLower(hashString)
 }
 
 func calculateSalt(accountName string) string {
@@ -815,7 +819,7 @@ func main() {
 	}
 
 	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true",
 		user,
 		password,
 		host,
