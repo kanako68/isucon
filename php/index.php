@@ -52,15 +52,15 @@ $container->set('settings', function() {
 });
 $container->set('db', function ($c) {
     $config = $c->get('settings');
-    $options = [
-        PDO::ATTR_EMULATE_PREPARES => true, // エミュレーションを有効にする
-    ];
-    return new PDO(
+   
+    $pdo=new PDO(
         "mysql:dbname={$config['db']['database']};host={$config['db']['host']};port={$config['db']['port']};charset=utf8mb4",
         $config['db']['username'],
         $config['db']['password'],
-        $options
     );
+
+    $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
+    return $pdo
 });
 
 $container->set('view', function ($c) {
