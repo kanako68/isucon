@@ -60,7 +60,7 @@ $container->set('db', function ($c) {
     );
 
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
-    return $pdo
+    return $pdo;
 });
 
 $container->set('view', function ($c) {
