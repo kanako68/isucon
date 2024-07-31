@@ -133,70 +133,45 @@ $container->set('helper', function ($c) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
         
-            $comment_limit = $all_comments ? '' : 'LIMIT 3';
+            $post_ids = array_column($results, 'id');
+            $user_ids = array_unique(array_column($results, 'user_id'));
         
-            $query = "
-                SELECT 
-                    p.*,
-                    u.id AS user_id, u.username AS user_username, u.del_flg AS user_del_flg,
-                    c.id AS comment_id, c.content AS comment_content, c.created_at AS comment_created_at,
-                    cu.id AS comment_user_id, cu.username AS comment_user_username,
-                    (SELECT COUNT(*) FROM `comments` WHERE `post_id` = p.id) AS comment_count
-                FROM 
-                    `posts` p
-                JOIN 
-                    `users` u ON p.user_id = u.id
-                LEFT JOIN 
-                    (
-                        SELECT * FROM `comments`
-                        ORDER BY created_at DESC
-                        {$comment_limit}
-                    ) c ON p.id = c.post_id
-                LEFT JOIN 
-                    `users` cu ON c.user_id = cu.id
-                WHERE 
-                    u.del_flg = 0
-                ORDER BY 
-                    p.created_at DESC
-                LIMIT " . POSTS_PER_PAGE;
+            // Get all comments for these posts in one query
+            $comments_query = "SELECT c.*, u.* 
+                                FROM comments c
+                                JOIN users u ON c.user_id = u.id
+                                WHERE c.post_id IN (" . implode(',', array_fill(0, count($post_ids), '?')) . ")
+                                ORDER BY c.post_id, c.created_at DESC";
+            $stmt = $this->db()->prepare($comments_query);
+            $stmt->execute($post_ids);
+            $all_comments_data = $stmt->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_ASSOC);
         
-            $stmt = $this->db()->prepare($query);
-            $stmt->execute();
-            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            // Get all users for these posts in one query
+            $users_query = "SELECT * FROM users WHERE id IN (" . implode(',', array_fill(0, count($user_ids), '?')) . ")";
+            $stmt = $this->db()->prepare($users_query);
+            $stmt->execute($user_ids);
+            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $users = array_column($users, null, 'id');
         
             $posts = [];
-            $current_post = null;
-            foreach ($results as $row) {
-                if ($current_post === null || $current_post['id'] !== $row['id']) {
-                    if ($current_post !== null) {
-                        $posts[] = $current_post;
-                    }
-                    $current_post = [
-                        'id' => $row['id'],
-                        'user' => [
-                            'id' => $row['user_id'],
-                            'username' => $row['user_username'],
-                            'del_flg' => $row['user_del_flg']
-                        ],
-                        'comments' => [],
-                        'comment_count' => $row['comment_count'],
-                        // その他の投稿情報をここに追加
-                    ];
+            foreach ($results as $post) {
+                if (!isset($users[$post['user_id']]) || $users[$post['user_id']]['del_flg'] != 0) {
+                    continue;
                 }
-                if ($row['comment_id'] !== null) {
-                    $current_post['comments'][] = [
-                        'id' => $row['comment_id'],
-                        'content' => $row['comment_content'],
-                        'created_at' => $row['comment_created_at'],
-                        'user' => [
-                            'id' => $row['comment_user_id'],
-                            'username' => $row['comment_user_username']
-                        ]
-                    ];
+        
+                $post['user'] = $users[$post['user_id']];
+                $post['comments'] = isset($all_comments_data[$post['id']]) ? $all_comments_data[$post['id']] : [];
+                $post['comment_count'] = count($post['comments']);
+        
+                if (!$all_comments) {
+                    $post['comments'] = array_slice($post['comments'], 0, 3);
                 }
-            }
-            if ($current_post !== null) {
-                $posts[] = $current_post;
+        
+                $posts[] = $post;
+        
+                if (count($posts) >= POSTS_PER_PAGE) {
+                    break;
+                }
             }
         
             return $posts;
