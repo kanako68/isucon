@@ -2,6 +2,8 @@ package main
 
 import (
 	crand "crypto/rand"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io"
@@ -14,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"crypto/sha512"
-    "encoding/hex"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -24,7 +24,6 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 )
-
 
 var (
 	db    *sqlx.DB
@@ -118,17 +117,15 @@ func escapeshellarg(arg string) string {
 	return "'" + strings.Replace(arg, "'", "'\\''", -1) + "'"
 }
 
-
-
 func digest(src string) string {
-    // SHA-512ハッシュを計算
-    hash := sha512.Sum512([]byte(src))
-    
-    // ハッシュをHEX文字列に変換
-    hashString := hex.EncodeToString(hash[:])
-    
-    // 小文字に変換（opensslの出力と合わせるため）
-    return strings.ToLower(hashString)
+	// SHA-512ハッシュを計算
+	hash := sha512.Sum512([]byte(src))
+
+	// ハッシュをHEX文字列に変換
+	hashString := hex.EncodeToString(hash[:])
+
+	// 小文字に変換（opensslの出力と合わせるため）
+	return strings.ToLower(hashString)
 }
 
 func calculateSalt(accountName string) string {
@@ -310,19 +307,28 @@ func postLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var (
+	// テンプレートをキャッシュする
+	registerTemplate = template.Must(template.New("layout").ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("register.html"),
+	))
+)
+
 func getRegister(w http.ResponseWriter, r *http.Request) {
 	if isLogin(getSessionUser(r)) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("register.html")),
-	).Execute(w, struct {
+	err := registerTemplate.Execute(w, struct {
 		Me    User
 		Flash string
 	}{User{}, getFlash(w, r, "notice")})
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Print(err)
+	}
 }
 
 func postRegister(w http.ResponseWriter, r *http.Request) {
@@ -385,45 +391,52 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+var (
+	// テンプレートをキャッシュする
+	indexTemplate = template.Must(template.New("layout.html").Funcs(template.FuncMap{
+		"imageURL": imageURL,
+	}).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("index.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+)
+
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
 	results := []Post{}
-
 	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
 	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		log.Print(err)
 		return
 	}
 
 	posts, err := makePosts(results, getCSRFToken(r), false)
 	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		log.Print(err)
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	err = indexTemplate.Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
 		Flash     string
 	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Print(err)
+	}
 }
-
 func getAccountName(w http.ResponseWriter, r *http.Request) {
 	accountName := r.PathValue("accountName")
 	user := User{}
 
-	err := db.Get(&user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", accountName)
+	err := db.Get(&user, "SELECT * FROM users WHERE account_name = ? AND del_flg = 0", accountName)
 	if err != nil {
 		log.Print(err)
 		return
@@ -436,7 +449,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
+	err = db.Select(&results, "SELECT id, user_id, body, mime, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC", user.ID)
 	if err != nil {
 		log.Print(err)
 		return
@@ -449,14 +462,14 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 	}
 
 	commentCount := 0
-	err = db.Get(&commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
+	err = db.Get(&commentCount, "SELECT COUNT(*) AS count FROM comments WHERE user_id = ?", user.ID)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
 	postIDs := []int{}
-	err = db.Select(&postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
+	err = db.Select(&postIDs, "SELECT id FROM posts WHERE user_id = ?", user.ID)
 	if err != nil {
 		log.Print(err)
 		return
@@ -477,7 +490,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 			args[i] = v
 		}
 
-		err = db.Get(&commentedCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ("+placeholder+")", args...)
+		err = db.Get(&commentedCount, "SELECT COUNT(*) AS count FROM comments WHERE post_id IN ("+placeholder+")", args...)
 		if err != nil {
 			log.Print(err)
 			return
@@ -524,7 +537,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601Format))
+	err = db.Select(&results, "SELECT id, user_id, body, mime, created_at FROM posts WHERE created_at <= ? ORDER BY created_at DESC", t.Format(ISO8601Format))
 	if err != nil {
 		log.Print(err)
 		return
@@ -551,48 +564,56 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	)).Execute(w, posts)
 }
 
+var (
+	// テンプレートをキャッシュする
+	postIDTemplate = template.Must(template.New("layout.html").Funcs(template.FuncMap{
+		"imageURL": imageURL,
+	}).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("post_id.html"),
+		getTemplPath("post.html"),
+	))
+)
+
 func getPostsID(w http.ResponseWriter, r *http.Request) {
-	pidStr := r.PathValue("id")
+	pidStr := r.URL.Query().Get("id") // r.PathValue("id") の代替として
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
+		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
 	results := []Post{}
 	err = db.Select(&results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		log.Print(err)
 		return
 	}
 
 	posts, err := makePosts(results, getCSRFToken(r), true)
 	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		log.Print(err)
 		return
 	}
 
 	if len(posts) == 0 {
-		w.WriteHeader(http.StatusNotFound)
+		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
 	p := posts[0]
-
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("post_id.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	err = postIDTemplate.Execute(w, struct {
 		Post Post
 		Me   User
 	}{p, me})
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Print(err)
+	}
 }
 
 func postIndex(w http.ResponseWriter, r *http.Request) {
@@ -734,6 +755,14 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
 
+var (
+	// テンプレートをキャッシュする
+	adminBannedTemplate = template.Must(template.New("layout.html").ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("banned.html"),
+	))
+)
+
 func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 	if !isLogin(me) {
@@ -742,25 +771,27 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if me.Authority == 0 {
-		w.WriteHeader(http.StatusForbidden)
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
 	users := []User{}
 	err := db.Select(&users, "SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
 	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		log.Print(err)
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("banned.html")),
-	).Execute(w, struct {
+	err = adminBannedTemplate.Execute(w, struct {
 		Users     []User
 		Me        User
 		CSRFToken string
 	}{users, me, getCSRFToken(r)})
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Print(err)
+	}
 }
 
 func postAdminBanned(w http.ResponseWriter, r *http.Request) {
@@ -832,6 +863,9 @@ func main() {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
 	defer db.Close()
+
+	db.SetMaxOpenConns(32)
+	db.SetMaxIdleConns(32)
 
 	r := chi.NewRouter()
 
